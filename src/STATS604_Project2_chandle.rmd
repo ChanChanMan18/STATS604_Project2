@@ -1,0 +1,67 @@
+---
+title: "STATS604_Project2"
+author: "Chandler Nielsen"
+date: "2025-09-24"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading Libraries
+
+```{r, message = FALSE}
+library(DESeq2)
+library(edgeR)    
+library(apeglm)
+library(data.table)
+```
+
+## Loading in Dataset and Correcting
+
+### First Load - ONLY RUN ONCE
+
+```{r}
+# Read in processed dataset
+# full_data <- fread("../data/processed_data/processed_brain.csv")
+```
+
+```{r}
+# Transposing data so it is correctly oriented
+# full_data_correct_orientation = t(full_data)
+```
+
+```{r}
+# Assign correct column names
+# colnames(full_data_correct_orientation) <-
+#  full_data_correct_orientation[1, ]
+```
+
+```{r}
+# Remove first row
+# full_data_correct_orientation <-
+#  full_data_correct_orientation[-1, ]
+```
+
+```{r}
+# Remove first column
+# full_data_correct_orientation <-
+#  full_data_correct_orientation[, -1]
+```
+
+```{r}
+# Write correct data to csv
+# write.csv(full_data_correct_orientation, "../data/processed_data/complete_processed_brain.csv", row.names = FALSE)
+```
+
+### Load Fully Processed Dataset
+
+```{r}
+full_data <- fread("../data/processed_data/complete_processed_brain.csv")
+```
+
+## Running DES
+
+
+
