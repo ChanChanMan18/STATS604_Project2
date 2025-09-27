@@ -12,56 +12,489 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Loading Libraries
 
 ```{r, message = FALSE}
-library(DESeq2)
-library(edgeR)    
-library(apeglm)
+library(limma)
 library(data.table)
 ```
 
-## Loading in Dataset and Correcting
-
-### First Load - ONLY RUN ONCE
+## Loading in Dataset and Quality Control
 
 ```{r}
-# Read in processed dataset
-# full_data <- fread("../data/processed_data/processed_brain.csv")
+sample_names <- paste0("Sample", 1:386)
 ```
 
 ```{r}
-# Transposing data so it is correctly oriented
-# full_data_correct_orientation = t(full_data)
+expression_data <- fread("../data/processed_data/expression.csv")
+expression_data <- as.data.frame(expression_data[-1, ])
+expression_data <- data.frame(expression_data, row.names = expression_data[ , 1])
+expression_data <- expression_data[, -1]
+colnames(expression_data) <- sample_names
 ```
 
 ```{r}
-# Assign correct column names
-# colnames(full_data_correct_orientation) <-
-#  full_data_correct_orientation[1, ]
+covariate_data <- fread("../data/processed_data/covariates.csv")
+covariate_data <- covariate_data[, -1]
+rownames(covariate_data) <- sample_names
+```
+
+## Control and Duplicate Quality Control
+
+```{r}
+# Identify control probes
+is_control <- grepl("^AFFX", 
+                    rownames(expression_data),
+                    ignore.case = TRUE)
+
 ```
 
 ```{r}
-# Remove first row
-# full_data_correct_orientation <-
-#  full_data_correct_orientation[-1, ]
+# Handling duplicated data
+# Expression_data
+grp <- as.character(seq_len(ncol(expression_data)))
+grp[c(5, 6)] <- "dup1834"
+grp[c(27, 28)] <- "dup2169"
+grp[c(41, 42)] <- "dup2292"
+grp[c(47, 48)] <- "dup2316"
+grp[c(53, 54)] <- "dup2619"
+grp[c(63, 64)] <- "dup2664"
+grp[c(82, 83)] <- "dup2847"
+grp[c(88, 89)] <- "dup2861"
+grp[c(94, 95)] <- "dup2894"
+grp[c(100, 101)] <- "dup2895"
+grp[c(241, 242)] <- "dup3519"
+expression_collapsed <- avearrays(expression_data,
+                                  ID = grp)
+
+# Covariate_data
+covariate_data$._grp <- grp
+covariate_collapsed <- covariate_data[!duplicated(covariate_data$._grp), 
+                                      , 
+                                      drop = FALSE]
+
+colnames(expression_collapsed) <- covariate_collapsed$._grp
+rownames(covariate_collapsed) <- covariate_collapsed$._grp
+```
+
+## Normalization between Arrays 
+
+```{r}
+# Between-array normalization
+expression_norm <- normalizeBetweenArrays(expression_collapsed,
+                                          method = "quantile")
+
+```
+
+## Contrasts by Brain Region
+
+```{r}
+# Base biological design
+cov <- covariate_collapsed
+cov$age_group <- factor(
+  cov$age_group,
+  levels = c("<70", ">=70"),        # adjust if your levels differ
+  labels = c("lt70", "ge70")        # becomes lt70 / ge70
+)
+
+# Encode covariates
+cov$region <- factor(cov$region, levels = c("cb", "ancg", "dlpfc"))
+cov$sex <- factor(cov$sex)
+cov$lab <- factor(cov$lab)
+cov$arrayversion <- factor(cov$arrayversion)
+cov$age_group <- factor(cov$age_group)
+
+X <- model.matrix(~ region + sex + lab + age_group + arrayversion, 
+                        data = cov)
+
+X <- X[, colSums(abs(X)) > 0, drop=FALSE]
+
+fit <- lmFit(expression_norm, design = X)
+fit <- eBayes(fit, trend = TRUE)
+
+cont <- limma::makeContrasts(
+  ancg_vs_cb    = regionancg,
+  dlpfc_vs_cb   = regiondlpfc,
+  ancg_vs_dlpfc = regionancg - regiondlpfc,
+  levels = colnames(X)
+)
+
+fit2 <- contrasts.fit(fit, cont)
+fit2 <- eBayes(fit2, trend=TRUE)
+
+# Report Results
+res_ancg_vs_cb    <- topTable(fit2, coef = "ancg_vs_cb",    number = Inf)
+res_dlpfc_vs_cb   <- topTable(fit2, coef = "dlpfc_vs_cb",   number = Inf)
+res_ancg_vs_dlpfc <- topTable(fit2, coef = "ancg_vs_dlpfc", number = Inf)
 ```
 
 ```{r}
-# Remove first column
-# full_data_correct_orientation <-
-#  full_data_correct_orientation[, -1]
+colnames(fit2)                     
+coef_name <- "ancg_vs_cb"          
+
+# Call decideTests on the same object
+dt <- decideTests(fit2, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit2, coef = coef_name, 
+       status = dt[, coef_name], ylim = c(-4, 4),
+       main = "ANCG vs CB")
+abline(h = 0, col = "grey70", lty = 2)
 ```
 
 ```{r}
-# Write correct data to csv
-# write.csv(full_data_correct_orientation, "../data/processed_data/complete_processed_brain.csv", row.names = FALSE)
+volcanoplot(fit2, coef="ancg_vs_cb", highlight=50, main="ANCG vs CB")
 ```
-
-### Load Fully Processed Dataset
 
 ```{r}
-full_data <- fread("../data/processed_data/complete_processed_brain.csv")
+colnames(fit2)                     # see available contrasts
+coef_name <- "dlpfc_vs_cb"          # pick one
+
+# Call decideTests on the same object
+dt <- decideTests(fit2, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit2, coef = coef_name, status = dt[, coef_name], 
+       ylim = c(-4, 4), main="DLPFC vs CB")
+abline(h = 0, col = "grey70", lty = 2)
 ```
 
-## Running DES
+```{r}
+volcanoplot(fit2, coef="dlpfc_vs_cb", highlight=50, main="DLPFC vs CB")
+```
+
+
+```{r}
+colnames(fit2)                     
+coef_name <- "ancg_vs_dlpfc"  
+
+# Call decideTests on the same object
+dt <- decideTests(fit2, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit2, coef = coef_name, status = dt[, coef_name], 
+       ylim = c(-4, 4), main = "ANCG vs DLPFC")
+abline(h = 0, col = "grey70", lty = 2)
+```
+```{r}
+# 2) median logFC should be ~0 (no global bias)
+tt <- topTable(fit2, coef="ancg_vs_cb", number=Inf, sort.by="none")
+median(tt$logFC)
+```
+
+```{r}
+volcanoplot(fit2, coef="ancg_vs_dlpfc", highlight=50, main="ANCG vs DLPFC")
+```
+
+## Contrasts by Lab
+
+```{r}
+# Base biological design
+cov2 <- covariate_collapsed
+cov2$age_group <- factor(
+  cov2$age_group,
+  levels = c("<70", ">=70"),        # adjust if your levels differ
+  labels = c("lt70", "ge70")        # becomes lt70 / ge70
+)
+
+# Encode covariates
+cov2$region <- factor(cov2$region, levels = c("cb", "ancg", "dlpfc"))
+cov2$sex <- factor(cov2$sex)
+cov2$lab <- factor(cov2$lab, levels=c("michigan", "irvine", "davis"))
+cov2$arrayversion <- factor(cov2$arrayversion)
+cov2$age_group <- factor(cov2$age_group)
+
+X2 <- model.matrix(~ region + sex + lab + age_group + arrayversion, 
+                        data = cov2)
+
+X2 <- X2[, colSums(abs(X2)) > 0, drop=FALSE]
+
+fit <- lmFit(expression_norm, design = X2)
+
+cont_lab <- limma::makeContrasts(
+  irvine_vs_michigan = labirvine,
+  davis_vs_michigan  = labdavis,
+  irvine_vs_davis    = labirvine - labdavis,
+  levels = colnames(fit$design)
+)
+
+fit_lab <- contrasts.fit(fit, cont_lab)
+fit_lab <- eBayes(fit_lab, trend = TRUE)
+
+res_irvine_vs_michigan <- topTable(fit_lab, coef = "irvine_vs_michigan", number = Inf)
+res_davis_vs_michigan  <- topTable(fit_lab, coef = "davis_vs_michigan",  number = Inf)
+res_irvine_vs_davis    <- topTable(fit_lab, coef = "irvine_vs_davis",    number = Inf)
+
+```
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "davis_vs_michigan"          
+
+# Call decideTests on the same object
+dt_lab <- decideTests(fit_lab, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_lab, coef = coef_name, 
+       status = dt_lab[, coef_name], ylim = c(-4, 4),
+       main = "Davis vs Michigan")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+```{r}
+volcanoplot(fit_lab, coef="davis_vs_michigan", highlight=50, main="Davis vs Michigan")
+```
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "irvine_vs_michigan"          
+
+# Call decideTests on the same object
+dt_lab <- decideTests(fit_lab, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_lab, coef = coef_name, 
+       status = dt_lab[, coef_name], ylim = c(-4, 4),
+       main = "Irvine vs Michigan")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+```{r}
+volcanoplot(fit_lab, coef="irvine_vs_michigan", highlight=50, main="Irvine vs Michigan")
+```
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "irvine_vs_davis"          
+
+# Call decideTests on the same object
+dt_lab <- decideTests(fit_lab, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_lab, coef = coef_name, 
+       status = dt_lab[, coef_name], ylim = c(-4, 4),
+       main = "Irvine vs Davis")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+```{r}
+volcanoplot(fit_lab, coef="irvine_vs_davis", highlight=50, main="Irvine vs Davis")
+```
+
+
+## Contrasts by Lab and Array Version
+
+```{r}
+# Base biological design
+cov3 <- covariate_collapsed
+cov3$age_group <- factor(
+  cov3$age_group,
+  levels = c("<70", ">=70"),        # adjust if your levels differ
+  labels = c("lt70", "ge70")        # becomes lt70 / ge70
+)
+
+# Encode covariates
+cov3$region <- factor(cov3$region, levels = c("cb", "ancg", "dlpfc"))
+cov3$sex <- factor(cov3$sex)
+cov3$lab <- factor(cov3$lab, levels=c("michigan", "irvine", "davis"))
+cov3$arrayversion <- factor(cov3$arrayversion, levels=c("1", "2"))
+cov3$age_group <- factor(cov3$age_group)
+
+X3 <- model.matrix(~ region + sex + lab + age_group + arrayversion + lab:arrayversion, 
+                        data = cov3)
+
+X3 <- X3[, colSums(abs(X3)) > 0, drop=FALSE]
+
+fit_contrasts <- lmFit(expression_norm, design = X3)
+
+colnames(fit_contrasts$design) <- make.names(colnames(fit_contrasts$design))
+
+cont_simple <- limma::makeContrasts(
+  # version 1 (baseline)
+  irvine_vs_michigan_v1 =  labirvine,
+  davis_vs_michigan_v1  =  labdavis,
+  irvine_vs_davis_v1    =  labirvine - labdavis,
+
+  # version 2 (add the interaction terms)
+  irvine_vs_michigan_v2 =  labirvine + labirvine.arrayversion2,
+  davis_vs_michigan_v2  =  labdavis  + labdavis.arrayversion2,
+  irvine_vs_davis_v2    = (labirvine - labdavis) + (labirvine.arrayversion2 - labdavis.arrayversion2),
+
+  levels = colnames(fit_contrasts$design)
+)
+
+fit_simple <- contrasts.fit(fit_contrasts, cont_simple)
+fit_simple <- eBayes(fit_simple, trend = TRUE)
+
+res_irv_mi_v1 <- topTable(fit_simple, coef="irvine_vs_michigan_v1", number=Inf)
+res_irv_mi_v2 <- topTable(fit_simple, coef="irvine_vs_michigan_v2", number=Inf)
+
+```
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "davis_vs_michigan_v1"          
+
+# Call decideTests on the same object
+dt_interaction_contrast <- decideTests(fit_simple, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_simple, coef = coef_name, 
+       status = dt_interaction_contrast[, coef_name], ylim = c(-4, 4),
+       main = "Davis vs Michigan, Arrayversion: v1")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "davis_vs_michigan_v2"          
+
+# Call decideTests on the same object
+dt_interaction_contrast <- decideTests(fit_simple, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_simple, coef = coef_name, 
+       status = dt_interaction_contrast[, coef_name], ylim = c(-4, 4),
+       main = "Davis vs Michigan, Arrayversion: v2")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "irvine_vs_davis_v1"          
+
+# Call decideTests on the same object
+dt_interaction_contrast <- decideTests(fit_simple, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_simple, coef = coef_name, 
+       status = dt_interaction_contrast[, coef_name], ylim = c(-4, 4),
+       main = "Irvine vs Davis, Arrayversion: v1")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "irvine_vs_davis_v2"          
+
+# Call decideTests on the same object
+dt_interaction_contrast <- decideTests(fit_simple, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_simple, coef = coef_name, 
+       status = dt_interaction_contrast[, coef_name], ylim = c(-4, 4),
+       main = "Irvine vs Davis, Arrayversion: v2")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "irvine_vs_michigan_v1"          
+
+# Call decideTests on the same object
+dt_interaction_contrast <- decideTests(fit_simple, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_simple, coef = coef_name, 
+       status = dt_interaction_contrast[, coef_name], ylim = c(-4, 4),
+       main = "Irvine vs Michigan, Arrayversion: v1")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+
+
+```{r}
+colnames(fit_lab)                     
+coef_name <- "irvine_vs_michigan_v2"          
+
+# Call decideTests on the same object
+dt_interaction_contrast <- decideTests(fit_simple, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_simple, coef = coef_name, 
+       status = dt_interaction_contrast[, coef_name], ylim = c(-4, 4),
+       main = "Irvine vs Michigan, Arrayversion: v2")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+# Contrasts by Lab and Brain Region
+
+```{r}
+# Base biological design
+cov4 <- covariate_collapsed
+cov4$age_group <- factor(
+  cov4$age_group,
+  levels = c("<70", ">=70"),        # adjust if your levels differ
+  labels = c("lt70", "ge70")        # becomes lt70 / ge70
+)
+
+# Encode covariates
+cov4$region <- factor(cov3$region, levels = c("cb", "ancg", "dlpfc"))
+cov4$sex <- factor(cov3$sex)
+cov4$lab <- factor(cov3$lab, levels=c("michigan", "irvine", "davis"))
+cov4$arrayversion <- factor(cov4$arrayversion, levels=c("1", "2"))
+cov4$age_group <- factor(cov4$age_group)
+
+X4 <- model.matrix(~ region + sex + lab + age_group + arrayversion + region:lab, 
+                        data = cov4)
+
+X4 <- X4[, colSums(abs(X4)) > 0, drop=FALSE]
+
+fit_contrasts_region_lab <- lmFit(expression_norm, design = X4)
+colnames(fit_contrasts_region_lab$design) <- make.names(colnames(fit_contrasts_region_lab$design))
+
+
+cont_region_within_lab <- limma::makeContrasts(
+  # Michigan (reference lab): just main region effects
+  ancg_vs_cb__michigan    =  regionancg,
+  dlpfc_vs_cb__michigan   =  regiondlpfc,
+  ancg_vs_dlpfc__michigan =  regionancg - regiondlpfc,
+
+  # Irvine: add the appropriate interactions
+  ancg_vs_cb__irvine    =  regionancg + regionancg.labirvine,
+  dlpfc_vs_cb__irvine   =  regiondlpfc + regiondlpfc.labirvine,
+  ancg_vs_dlpfc__irvine = (regionancg - regiondlpfc) +
+                          (regionancg.labirvine - regiondlpfc.labirvine),
+
+  # Davis
+  dlpfc_vs_cb__davis  =  regiondlpfc + regiondlpfc.labdavis,
+  levels = colnames(fit_contrasts_region_lab$design)
+)
+
+fit_RinL <- contrasts.fit(fit_contrasts_region_lab, cont_region_within_lab)
+fit_RinL <- eBayes(fit_RinL, trend = TRUE)
+
+```
+
+```{r}
+colnames(fit_RinL)                     
+coef_name <- "ancg_vs_dlpfc__michigan"          
+
+# Call decideTests on the same object
+dt_interaction_contrast <- decideTests(fit_RinL, adjust.method = "BH", p.value = 0.05)
+
+# Plot for that ONE contrast, passing the matching status column
+plotMA(fit_RinL, coef = coef_name, 
+       status = dt_interaction_contrast[, coef_name], ylim = c(-4, 4),
+       main = "ANCG vs DLPFC, Michigan")
+abline(h = 0, col = "grey70", lty = 2)
+```
+
+
+```{r}
+
+boxplot(split(colMeans(expression_norm), cov$lab), main="Array means by lab")
+
+```
+
+
+
+
+
+
+
+
+
+
+
 
 
 
