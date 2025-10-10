@@ -9,6 +9,12 @@ output: pdf_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Note for user
+
+The following code reads in data processed in the Python notebook STATS604_Project2_chandle.ipynb. The user should read in the raw brain data and preprocess this raw data there. Then, the user needs to update the path below such that it reads in this processed data from the right place.
+
+For analysis involving PCA and the exploratory data analysis completed by Chandler, see the python notebook above.
+
 ## Loading Libraries
 
 ```{r, message = FALSE}
